@@ -194,4 +194,12 @@ if __name__ == "__main__":
     x = torch.randn(N,C,T,V,M)
     model.forward(x)
 
+    for param in model.parameters():
+        param.requires_grad = False
+
+    model.fc = nn.Linear(384, 20)
+
+    for name, param in model.named_parameters():
+        print((name, param.shape, param.requires_grad))
+
     print('Model total # params:', count_params(model))

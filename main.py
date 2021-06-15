@@ -288,7 +288,17 @@ class Processor():
         shutil.copy2(inspect.getfile(Model), self.arg.work_dir)
         shutil.copy2(os.path.join('.', __file__), self.arg.work_dir)
 
-        self.model = Model(**self.arg.model_args).cuda(output_device)
+        model = Model(**self.arg.model_args)
+        
+        # INI transfer learning
+        for param in model.parameters():
+            param.requires_grad = False
+
+        model.fc = nn.Linear(384, 20)
+        # END transfer learning
+
+        self.model = model.cuda(output_device)
+
         self.loss = nn.CrossEntropyLoss().cuda(output_device)
         self.print_log(f'Model total number of params: {count_params(self.model)}')
 
@@ -309,6 +319,7 @@ class Processor():
             weights = OrderedDict(
                 [[k.split('module.')[-1],
                   v.cuda(output_device)] for k, v in weights.items()])
+            print(weights.keys())
 
             for w in self.arg.ignore_weights:
                 if weights.pop(w, None) is not None:
@@ -326,6 +337,11 @@ class Processor():
                     self.print_log('  ' + d)
                 state.update(weights)
                 self.model.load_state_dict(state)
+
+        
+
+        for name, param in self.model.named_parameters():
+            print((name, param.shape, param.requires_grad))
 
     def load_param_groups(self):
         """
