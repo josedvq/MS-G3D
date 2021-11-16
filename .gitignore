@@ -108,3 +108,8 @@ venv.bak/
 # mypy
 .mypy_cache/
 
+data/
+pretrain_eval/
+transfer_learning/
+pretrained-models/
+data_gen/*.png

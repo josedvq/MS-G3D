@@ -294,7 +294,7 @@ class Processor():
         for param in model.parameters():
             param.requires_grad = False
 
-        model.fc = nn.Linear(384, 20)
+        model.fc = nn.Linear(384, self.arg.model_args['num_class'])
         # END transfer learning
 
         self.model = model.cuda(output_device)
@@ -624,10 +624,14 @@ class Processor():
 
             print('Accuracy: ', accuracy, ' model: ', self.arg.work_dir)
             if self.arg.phase == 'train' and not self.arg.debug:
-                self.val_writer.add_scalar('loss', loss, self.global_step)
+                self.val_writer.add_scalar('loss', loss,    self.global_step)
                 self.val_writer.add_scalar('loss_l1', l1, self.global_step)
                 self.val_writer.add_scalar('acc', accuracy, self.global_step)
 
+            if score.shape[1] == 2:
+                auc = self.data_loader[ln].dataset.auc(np.squeeze(score[:,1]))
+                print(f'ROC AUC: {auc}')
+            
             score_dict = dict(zip(self.data_loader[ln].dataset.sample_name, score))
             self.print_log(f'\tMean {ln} loss of {len(self.data_loader[ln])} batches: {np.mean(loss_values)}.')
             for k in self.arg.show_topk:

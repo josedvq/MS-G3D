@@ -5,7 +5,7 @@ import torch
 import pickle
 import numpy as np
 from torch.utils.data import Dataset
-
+from sklearn.metrics import roc_auc_score
 from feeders import tools
 
 
@@ -92,6 +92,10 @@ class Feeder(Dataset):
         rank = score.argsort()
         hit_top_k = [l in rank[i, -top_k:] for i, l in enumerate(self.label)]
         return sum(hit_top_k) * 1.0 / len(hit_top_k)
+
+    def auc(self, score):
+        return roc_auc_score(self.label, score)
+
 
 
 def import_class(name):
