@@ -1,0 +1,30 @@
+
+save_score: False
+seed: 22
+feeder: feeder.feeder
+num_worker: 4
+
+# checkpointing
+model_saved_name: ''
+checkpoint: null
+
+# training
+start_epoch: 0
+num_epoch: 80
+optimizer: SGD
+
+
+# log & debug
+assume_yes: True
+debug: False
+print_log: False
+
+log_interval: 100
+save_interval: 1
+eval_interval: 1
+eval_start: 1
+show_topk: [1,5]
+
+# apex
+half: True
+amp_opt_level: 1

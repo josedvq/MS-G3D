@@ -18,10 +18,7 @@ num_joint = 18
 max_frame = 180
 num_person = 2
 
-# bt2 = 1571928576 * 1000 + 1000 * 58 / 60  
 bt2 = datetime(2019, 10, 24, 16, 49, 36, int(1000000 * 58/59.94)) # start timecode of vid2 : 14:49:36:58
-# note: 1571928576 + (17*60+37) = 1571929633
-# bt3 = 1571929633 * 1000 + 1000 * 58 / 60  
 bt3 = datetime(2019, 10, 24, 17, 7, 13, int(1000000 * 58/59.94)) # start timecode of vid3 : 15:07:13:58
 timecodes = {
     'vid2_seg8': bt2 + timedelta(minutes=14),
@@ -103,7 +100,7 @@ class Feeder_conflab(Dataset):
                         })
             for pid, track in seg_dict['tracks'].items():
                 new_track = [[e['frame'], *e['kp'], *e['occl']] for e in track]
-                seg_dict['tracks'][pid] = np.array(new_track)
+                seg_dict['tracks'][pid] = np.array(new_track, dtype=np.float64)
             self.segments.append(seg_dict)
 
     def parse_fname(self, fname):
