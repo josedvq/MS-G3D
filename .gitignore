@@ -110,6 +110,6 @@ venv.bak/
 
 data/
 pretrain_eval/
-transfer_learning/
+conflab/
 pretrained-models/
 data_gen/*.png

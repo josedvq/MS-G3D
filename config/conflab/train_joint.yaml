@@ -7,10 +7,12 @@ train_feeder_args:
   data_path: ./data/conflab_subject/train_data_joint.npy
   label_path: ./data/conflab_subject/train_label.pkl
   debug: False
+  use_mmap: False
 
 test_feeder_args:
   data_path: ./data/conflab_subject/val_data_joint.npy
   label_path: ./data/conflab_subject/val_label.pkl
+  use_mmap: False
 
 # model
 model: model.msg3d.Model
@@ -31,13 +33,9 @@ step: [45, 55]
 
 # training
 num_epoch: 65
-# device: [0, 1]
 device: 0
-# batch_size: 32
 batch_size: 128
-# forward_batch_size: 32
 forward_batch_size: 64
-# test_batch_size: 32
 test_batch_size: 128
 nesterov: True
 

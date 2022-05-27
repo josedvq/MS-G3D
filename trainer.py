@@ -26,6 +26,9 @@ class Trainer():
             # Added control through the command line
             arg['train_feeder_args']['debug'] = arg['train_feeder_args']['debug'] or self.arg['debug']
             logdir = os.path.join(arg['work_dir'], 'trainlogs')
+
+            print(f'logdir is {logdir}')
+
             if not arg['train_feeder_args']['debug']:
                 # logdir = arg['model_saved_name']
                 if os.path.isdir(logdir):
@@ -49,7 +52,6 @@ class Trainer():
         self.load_param_groups()
         self.load_optimizer()
         self.load_lr_scheduler()
-        self.load_data()
 
         self.global_step = 0
         self.lr = self.arg['base_lr']
@@ -192,31 +194,6 @@ class Trainer():
             self.print_log(f'Starting last epoch: {scheduler_states["last_epoch"]}')
             self.print_log(f'Loaded milestones: {scheduler_states["last_epoch"]}')
 
-    def load_data(self):
-        Feeder = import_class(self.arg['feeder'])
-        self.data_loader = dict()
-
-        def worker_seed_fn(worker_id):
-            # give workers different seeds
-            return init_seed(self.arg['seed'] + worker_id + 1)
-
-        if self.arg['phase'] == 'train':
-            self.data_loader['train'] = torch.utils.data.DataLoader(
-                dataset=Feeder(**self.arg['train_feeder_args']),
-                batch_size=self.arg['batch_size'],
-                shuffle=True,
-                num_workers=self.arg['num_worker'],
-                drop_last=True,
-                worker_init_fn=worker_seed_fn)
-
-        self.data_loader['test'] = torch.utils.data.DataLoader(
-            dataset=Feeder(**self.arg['test_feeder_args']),
-            batch_size=self.arg['test_batch_size'],
-            shuffle=False,
-            num_workers=self.arg['num_worker'],
-            drop_last=False,
-            worker_init_fn=worker_seed_fn)
-
     def save_arg(self):
         # save arg
         if not os.path.exists(self.arg['work_dir']):
@@ -271,9 +248,30 @@ class Trainer():
         weights_name = f'weights-{epoch}-{int(self.global_step)}.pt'
         self.save_states(epoch, weights, out_folder, weights_name)
 
-    def train(self, epoch, save_model=False):
+    def train(self, train_dl, eval_dl):
+        self.print_log(f'Parameters:\n{pprint.pformat(self.arg)}\n')
+        self.print_log(f'Model total number of params: {count_params(self.model)}')
+
+
+        self.global_step = self.arg['start_epoch'] * len(train_dl) / self.arg['batch_size']
+        for epoch in range(self.arg['start_epoch'], self.arg['num_epoch']):
+            save_model = ((epoch + 1) % self.arg['save_interval'] == 0) or (epoch + 1 == self.arg['num_epoch'])
+            self.train_epoch(epoch, train_dl, save_model=save_model)
+            self.eval(epoch, eval_dl, save_score=self.arg['save_score'])
+
+        num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        self.print_log(f'Best accuracy: {self.best_acc}')
+        self.print_log(f'Epoch number: {self.best_acc_epoch}')
+        self.print_log(f'Model name: {self.arg["work_dir"]}')
+        self.print_log(f'Model total number of params: {num_params}')
+        self.print_log(f'Weight decay: {self.arg["weight_decay"]}')
+        self.print_log(f'Base LR: {self.arg["base_lr"]}')
+        self.print_log(f'Batch Size: {self.arg["batch_size"]}')
+        self.print_log(f'Forward Batch Size: {self.arg["forward_batch_size"]}')
+        self.print_log(f'Test Batch Size: {self.arg["test_batch_size"]}')
+
+    def train_epoch(self, epoch, loader, save_model=False):
         self.model.train()
-        loader = self.data_loader['train']
         loss_values = []
         self.train_writer.add_scalar('epoch', epoch + 1, self.global_step)
         self.record_time()
@@ -283,7 +281,7 @@ class Trainer():
         self.print_log(f'Training epoch: {epoch + 1}, LR: {current_lr:.4f}')
 
         process = tqdm(loader, dynamic_ncols=True)
-        for batch_idx, (data, label, index) in enumerate(process):
+        for batch_idx, (data, label, _) in enumerate(process):
             self.global_step += 1
             # get data
             with torch.no_grad():
@@ -369,117 +367,70 @@ class Trainer():
             self.save_weights(epoch + 1)
             self.save_checkpoint(epoch + 1)
 
-    def eval(self, epoch, save_score=False, loader_name=['test'], wrong_file=None, result_file=None):
+    def eval(self, epoch, loader, save_score=False):
         # Skip evaluation if too early
         if epoch + 1 < self.arg['eval_start']:
             return
 
-        if wrong_file is not None:
-            f_w = open(wrong_file, 'w')
-        if result_file is not None:
-            f_r = open(result_file, 'w')
         with torch.no_grad():
             self.model = self.model.cuda(self.output_device)
             self.model.eval()
             self.print_log(f'Eval epoch: {epoch + 1}')
-            for ln in loader_name:
-                loss_values = []
-                score_batches = []
-                step = 0
-                process = tqdm(self.data_loader[ln], dynamic_ncols=True)
-                for batch_idx, (data, label, index) in enumerate(process):
-                    data = data.float().cuda(self.output_device)
-                    label = label.long().cuda(self.output_device)
-                    output = self.model(data)
-                    if isinstance(output, tuple):
-                        output, l1 = output
-                        l1 = l1.mean()
-                    else:
-                        l1 = 0
-                    loss = self.loss(output, label)
-                    score_batches.append(output.data.cpu().numpy())
-                    loss_values.append(loss.item())
+            loss_values = []
+            all_scores = []
+            all_idxs = []
+            step = 0
+            process = tqdm(loader, dynamic_ncols=True)
+            for batch_idx, (data, label, idxs) in enumerate(process):
+                data = data.float().cuda(self.output_device)
+                label = label.long().cuda(self.output_device)
+                output = self.model(data)
+                loss = self.loss(output, label)
+                all_scores.append(output.data.cpu().numpy())
+                all_idxs.append(idxs.cpu().numpy())
+                loss_values.append(loss.item())
 
-                    _, predict_label = torch.max(output.data, 1)
-                    step += 1
+                step += 1
 
-                    if wrong_file is not None or result_file is not None:
-                        predict = list(predict_label.cpu().numpy())
-                        true = list(label.data.cpu().numpy())
-                        for i, x in enumerate(predict):
-                            if result_file is not None:
-                                f_r.write(str(x) + ',' + str(true[i]) + '\n')
-                            if x != true[i] and wrong_file is not None:
-                                f_w.write(str(index[i]) + ',' + str(x) + ',' + str(true[i]) + '\n')
-
-            score = np.concatenate(score_batches)
+            all_scores = np.concatenate(all_scores)
+            all_idxs = np.concatenate(all_idxs)
             loss = np.mean(loss_values)
-            accuracy = self.data_loader[ln].dataset.top_k(score, 1)
-            if accuracy > self.best_acc:
-                self.best_acc = accuracy
-                self.best_acc_epoch = epoch + 1
-
+            accuracy = loader.dataset.accuracy(all_idxs, all_scores)
             print('Accuracy: ', accuracy, ' model: ', self.arg['work_dir'])
-            if self.arg['phase'] == 'train' and not self.arg['debug']:
-                self.val_writer.add_scalar('loss', loss,    self.global_step)
-                self.val_writer.add_scalar('loss_l1', l1, self.global_step)
-                self.val_writer.add_scalar('acc', accuracy, self.global_step)
 
-            if score.shape[1] == 2:
-                auc = self.data_loader[ln].dataset.auc(np.squeeze(score[:,1]))
+            auc=None
+            if all_scores.shape[1] == 2:
+                auc = loader.dataset.auc(all_idxs, all_scores[:,1])
                 print(f'ROC AUC: {auc}')
-            
-            score_dict = dict(zip(self.data_loader[ln].dataset.sample_name, score))
-            self.print_log(f'\tMean {ln} loss of {len(self.data_loader[ln])} batches: {np.mean(loss_values)}.')
-            for k in self.arg['show_topk']:
-                self.print_log(f'\tTop {k}: {100 * self.data_loader[ln].dataset.top_k(score, k):.2f}%')
+                self.val_writer.add_scalar('auc', auc,      self.global_step)
 
-            if save_score:
-                with open('{}/epoch{}_{}_score.pkl'.format(self.arg['work_dir'], epoch + 1, ln), 'wb') as f:
-                    pickle.dump(score_dict, f)
+            self.val_writer.add_scalar('loss', loss,    self.global_step)
+            self.val_writer.add_scalar('acc', accuracy, self.global_step)
+                        
+            self.print_log(f'\tMean loss of {len(loader)} batches: {np.mean(loss_values)}.')
+
+        metrics = {
+            'accuracy': accuracy,
+            'loss': loss
+        }
+        if auc is not None: metrics['auc'] = auc
 
         # Empty cache after evaluation
         torch.cuda.empty_cache()
+        return metrics, all_scores
 
-    def start(self):
-        if self.arg['phase'] == 'train':
-            self.print_log(f'Parameters:\n{pprint.pformat(self.arg)}\n')
-            self.print_log(f'Model total number of params: {count_params(self.model)}')
-            self.global_step = self.arg['start_epoch'] * len(self.data_loader['train']) / self.arg['batch_size']
-            for epoch in range(self.arg['start_epoch'], self.arg['num_epoch']):
-                save_model = ((epoch + 1) % self.arg['save_interval'] == 0) or (epoch + 1 == self.arg['num_epoch'])
-                self.train(epoch, save_model=save_model)
-                self.eval(epoch, save_score=self.arg['save_score'], loader_name=['test'])
+    def test(self, test_dl):
+        if self.arg['weights'] is None:
+            raise ValueError('Please appoint --weights.')
 
-            num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-            self.print_log(f'Best accuracy: {self.best_acc}')
-            self.print_log(f'Epoch number: {self.best_acc_epoch}')
-            self.print_log(f'Model name: {self.arg["work_dir"]}')
-            self.print_log(f'Model total number of params: {num_params}')
-            self.print_log(f'Weight decay: {self.arg["weight_decay"]}')
-            self.print_log(f'Base LR: {self.arg["base_lr"]}')
-            self.print_log(f'Batch Size: {self.arg["batch_size"]}')
-            self.print_log(f'Forward Batch Size: {self.arg["forward_batch_size"]}')
-            self.print_log(f'Test Batch Size: {self.arg["test_batch_size"]}')
+        self.print_log(f'Model:   {self.arg["model"]}')
+        self.print_log(f'Weights: {self.arg["weights"]}')
 
-        elif self.arg['phase'] == 'test':
-            if not self.arg['test_feeder_args']['debug']:
-                wf = os.path.join(self.arg['work_dir'], 'wrong-samples.txt')
-                rf = os.path.join(self.arg['work_dir'], 'right-samples.txt')
-            else:
-                wf = rf = None
-            if self.arg['weights'] is None:
-                raise ValueError('Please appoint --weights.')
+        metrics = self.eval(
+            epoch=0,
+            loader=test_dl,
+            save_score=self.arg['save_score']
+        )
 
-            self.print_log(f'Model:   {self.arg["model"]}')
-            self.print_log(f'Weights: {self.arg["weights"]}')
-
-            self.eval(
-                epoch=0,
-                save_score=self.arg['save_score'],
-                loader_name=['test'],
-                wrong_file=wf,
-                result_file=rf
-            )
-
-            self.print_log('Done.\n')
+        self.print_log('Done.\n')
+        return metrics
